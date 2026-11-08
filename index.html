@@ -427,8 +427,9 @@ input,select{font-family:inherit;color:inherit}
     if (rs[4] - rs[0] === 4 && rs[4] <= 11) return { str: rs[0], keyR: rs[4] };
     if (rules.lowStraights) {
       const s = rs.join(',');
-      if (s === '0,1,2,11,12') return { str: 8, keyR: 12 }; // A2345
-      if (s === '0,1,2,3,12') return { str: 9, keyR: 12 };  // 23456（最大）
+      if (s === '0,1,2,11,12') return { str: 9, keyR: 12 }; // A2345（最大）
+      if (s === '0,1,2,3,12') return { str: 8, keyR: 12 };  // 23456（第二大）
+      // 10JQKA = 7（第三大）；同一款蛇就比最大嗰張牌（呢兩款即係張 2）嘅花色
     }
     return null;
   }
@@ -1369,7 +1370,7 @@ input,select{font-family:inherit;color:inherit}
           <div class="rule"><label>出牌計時</label>${opt('turnTime', [0, 15, 20, 30, 45, 60], x => x ? '每回合 ' + x + ' 秒' : '不計時')}</div>
           ${isHost ? `<div class="tog" data-tog="d3First"><span>${r.d3First ? '每局由最細牌（通常係 ♦3）開局' : '每局由上局贏家開局'}</span><span class="sw2${r.d3First ? ' on' : ''}"></span></div>` : `<div class="tog ro"><span>${r.d3First ? '每局由最細牌（通常係 ♦3）開局' : '每局由上局贏家開局'}</span></div>`}
           ${tog('lastOneRule', '下家報一張，出單張必須出最大')}
-          ${tog('lowStraights', 'A2345、23456 計做蛇（23456 最大）')}
+          ${tog('lowStraights', 'A2345、23456 計做蛇（A2345 最大、23456 第二）')}
           ${tog('flushBySuit', '花（同花）先比花色，再比點數')}
           <div class="tog ro"><span>計分：剩 1–9 張 ×1 · 10–12 張炒 ×2 · 13 張三炒 ×3</span></div>
         </div>
