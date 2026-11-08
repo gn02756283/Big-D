@@ -389,6 +389,9 @@ input,select{font-family:inherit;color:inherit}
 .sheet .help,.sheet p{font-size:16px}
 .stat-t td:first-child{font-size:16px;max-width:140px}
 
+.plate.dead{opacity:.55;border-style:dashed;grid-template-columns:1fr}
+.plate.dead .help{font-size:13px;margin-top:2px}
+
 </style>
 </head>
 <body>
@@ -494,8 +497,8 @@ input,select{font-family:inherit;color:inherit}
     if (!cards || !cards.length) return { ok: false, err: '請先揀牌' };
     if (!cards.every(c => ctx.hand.includes(c))) return { ok: false, err: '手上冇呢啲牌' };
     const a = analyze(cards, ctx.rules);
-    if (!a) return { ok: false, err: cards.length === 4 ? '四條要帶一張單牌（共五張）' : '唔係有效牌型' };
-    if (ctx.mustInclude3 && !cards.includes(0)) return { ok: false, err: '首手必須包含 ♦3' };
+    if (!a) return { ok: false, err: cards.length === 4 && cards.every(c => rk(c) === rk(cards[0])) ? '四條要帶一張單牌（共五張）' : cards.length === 2 ? '兩張唔係一對' : cards.length === 3 ? '三張唔係三條' : cards.length === 5 ? '五張唔成牌型（蛇、花、俘佬、四條或同花順）' : '唔係有效牌型（只可以出 1、2、3 或 5 張）' };
+    if (ctx.mustCard >= 0 && !cards.includes(ctx.mustCard)) return { ok: false, err: '首手必須包含 ' + cardText(ctx.mustCard) };
     if (!ctx.leading) {
       const t = ctx.table.a;
       if (a.type !== t.type) return { ok: false, err: '要出' + TYPE_NAME[t.type] };
@@ -623,6 +626,13 @@ input,select{font-family:inherit;color:inherit}
   }
 
   /* redeal = 房主中途重新洗牌：今局作廢，唔計籌碼，局數不變 */
+  const activeOf = S => S.active || [0, 1, 2, 3].filter(i => S.seats[i]);
+  function nextSeat(S, s) {
+    const act = activeOf(S);
+    for (let k = 1; k <= 4; k++) { const n = (s + k) % 4; if (act.includes(n)) return n; }
+    return s;
+  }
+
   function startRound(S, randInt, redeal) {
     if (!redeal) S.seats.forEach(p => { if (p && p.chips <= 0) { p.chips += S.rules.startChips; p.rebuys++; } });
     const d = shuffled(randInt);
@@ -636,8 +646,11 @@ input,select{font-family:inherit;color:inherit}
     S.table = null; S.lastTable = null;
     S.passed = [false, false, false, false];
     S.log = []; S.played = []; S.lastResult = null;
-    const d3 = S.hands.findIndex(h => h.includes(0));
-    S.turn = (S.rules.d3First || S.lastWinner < 0) ? d3 : S.lastWinner;
+    // 最少兩人：照派四份，冇人坐嘅位係死牌；由在座玩家之中最細嗰張牌開局
+    S.active = [0, 1, 2, 3].filter(i => S.seats[i]);
+    S.startCard = Math.min(...S.active.flatMap(i => S.hands[i]));
+    const d3 = S.active.find(i => S.hands[i].includes(S.startCard));
+    S.turn = (S.rules.d3First || S.lastWinner < 0 || !S.active.includes(S.lastWinner)) ? d3 : S.lastWinner;
     S.firstPlay = true;
   }
 
@@ -645,8 +658,8 @@ input,select{font-family:inherit;color:inherit}
     const leading = !S.table || S.table.seat === seat;
     return {
       hand: S.hands[seat], table: S.table, leading,
-      mustInclude3: S.firstPlay && S.rules.d3First && S.hands[seat].includes(0),
-      nextCount: S.hands[(seat + 1) % 4].length, rules: S.rules
+      mustCard: S.firstPlay && S.rules.d3First && S.hands[seat].includes(S.startCard) ? S.startCard : -1,
+      nextCount: S.hands[nextSeat(S, seat)].length, rules: S.rules
     };
   }
 
@@ -658,7 +671,7 @@ input,select{font-family:inherit;color:inherit}
   function endRound(S, w) {
     const unit = S.rules.unit, rows = [], deltas = [0, 0, 0, 0];
     let total = 0;
-    for (let s = 0; s < 4; s++) {
+    for (const s of activeOf(S)) {
       if (s === w) continue;
       const n = S.hands[s].length, p = penalty(n), amt = p.units * unit;
       S.seats[s].chips -= amt; total += amt; deltas[s] = -amt;
@@ -667,6 +680,7 @@ input,select{font-family:inherit;color:inherit}
     S.seats[w].chips += total; deltas[w] = total;
     rows.unshift({ seat: w, left: 0, mult: 1, units: 0, amount: total, cards: [] });
     S.seats.forEach((p, s) => {
+      if (!p || !activeOf(S).includes(s)) return;
       p.stats.rounds++; p.stats.net += deltas[s];
       if (s === w) { p.stats.wins++; p.stats.best = Math.max(p.stats.best, total); }
     });
@@ -692,7 +706,7 @@ input,select{font-family:inherit;color:inherit}
     S.log.push({ seat, cards, name: r.a.name });
     S.played.push(...cards);
     if (!S.hands[seat].length) { endRound(S, seat); return { ok: true, ended: true }; }
-    S.turn = (seat + 1) % 4;
+    S.turn = nextSeat(S, seat);
     return { ok: true };
   }
 
@@ -712,7 +726,7 @@ input,select{font-family:inherit;color:inherit}
     S.log.push({ seat, cards, name: a ? a.name : '' });
     S.played.push(...cards);
     if (!S.hands[seat].length) { endRound(S, seat); return { ok: true, ended: true }; }
-    S.turn = (seat + 1) % 4;
+    S.turn = nextSeat(S, seat);
     return { ok: true };
   }
 
@@ -722,7 +736,7 @@ input,select{font-family:inherit;color:inherit}
     if (ctxFor(S, seat).leading) return { ok: false, err: '輪到你出牌，唔可以 Pass' };
     S.passed[seat] = true;
     S.log.push({ seat, pass: true });
-    const nx = (seat + 1) % 4;
+    const nx = nextSeat(S, seat);
     S.turn = nx;
     if (nx === S.table.seat) {
       S.lastTable = S.table; S.table = null;
@@ -740,7 +754,7 @@ input,select{font-family:inherit;color:inherit}
 
   function viewFor(S, seat) {
     return {
-      you: seat, phase: S.phase, rules: S.rules, roundNo: S.roundNo, dealNo: S.dealNo || 0, turn: S.turn,
+      you: seat, phase: S.phase, rules: S.rules, roundNo: S.roundNo, dealNo: S.dealNo || 0, active: activeOf(S), startCard: S.startCard == null ? 0 : S.startCard, turn: S.turn,
       seats: S.seats.map(publicSeat), counts: S.hands.map(h => h.length),
       hand: seat >= 0 ? [...S.hands[seat]] : [],
       table: S.table, lastTable: S.lastTable, passed: S.passed, firstPlay: S.firstPlay,
@@ -748,20 +762,21 @@ input,select{font-family:inherit;color:inherit}
     };
   }
 
+  function nextOf(act, s) { for (let k = 1; k <= 4; k++) { const n = (s + k) % 4; if (act.includes(n)) return n; } return s; }
   /* 客戶端由 view 砌返 ctx */
   function ctxFromView(v, hand) {
     hand = hand || v.hand;
     return {
       hand, table: v.table, leading: !v.table || v.table.seat === v.you,
-      mustInclude3: v.firstPlay && v.rules.d3First && hand.includes(0),
-      nextCount: v.counts[(v.you + 1) % 4], rules: v.rules
+      mustCard: v.firstPlay && v.rules.d3First && hand.includes(v.startCard) ? v.startCard : -1,
+      nextCount: v.counts[nextOf(v.active, v.you)], rules: v.rules
     };
   }
 
   const api = {
     SUIT_SYM, SUIT_NAME, RANK_TXT, FIVE_NAME, TYPE_NAME, DEFAULT_RULES,
     rk, st, cardText, analyze, beats, strength, allCombos, checkPlay, legal, aiChoose, hints,
-    groupHand, createState, startRound, ctxFor, play, freePlay, pass, secureInt, penalty, viewFor, ctxFromView, shuffled
+    groupHand, createState, startRound, ctxFor, play, freePlay, pass, secureInt, nextSeat, nextOf, penalty, viewFor, ctxFromView, shuffled
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Big2 = api;
@@ -974,7 +989,7 @@ input,select{font-family:inherit;color:inherit}
       if (seat < 0 && S.phase !== 'lobby') seat = S.seats.findIndex(p => p && !p.isBot && !p.connected && p.name === name);
       let fresh = false;
       if (seat < 0) {
-        seat = S.phase === 'lobby' ? S.seats.findIndex(p => !p) : -1;
+        seat = S.phase !== 'playing' ? S.seats.findIndex(p => !p) : -1;
         if (seat < 0) seat = S.seats.findIndex(p => p && p.isBot);
         if (seat < 0) { try { conn.send({ t: 'error', fatal: true, msg: S.phase === 'lobby' ? '房間已滿。' : '牌局進行中，暫時冇空位。' }); } catch (e) { } setTimeout(() => conn.close(), 400); return; }
         const old = S.seats[seat];
@@ -1009,7 +1024,7 @@ input,select{font-family:inherit;color:inherit}
       let r;
       switch (m.t) {
         case 'play':
-          r = E.freePlay(S, seat, Array.isArray(m.cards) ? m.cards.map(Number) : []);
+          r = E.play(S, seat, Array.isArray(m.cards) ? m.cards.map(Number) : []);
           if (!r.ok) return this.err(seat, r.err);
           return this.after();
         case 'pass':
@@ -1022,7 +1037,7 @@ input,select{font-family:inherit;color:inherit}
         case 'start': case 'next':
           if (!isHost) return;
           if ((m.t === 'start' && S.phase !== 'lobby') || (m.t === 'next' && S.phase !== 'settle')) return;
-          if (S.seats.some(p => !p)) return this.err(seat, '未夠四位玩家，可以加入電腦玩家補位');
+          if (S.seats.filter(Boolean).length < 2) return this.err(seat, '最少要有兩位玩家先可以開始');
           E.startRound(S);
           this.dealUntil = Date.now() + DEAL_MS;
           return this.after();
@@ -1078,16 +1093,10 @@ input,select{font-family:inherit;color:inherit}
       const S = this.S; if (S.phase !== 'playing' || S.turn !== seat) return;
       const ctx = E.ctxFor(S, seat);
       const opp = [0, 1, 2, 3].filter(x => x !== seat).map(x => S.hands[x].length);
-      let r, ch = null;
-      if (timeout) {
-        // 超時：檯面有牌就 Pass；要開局就打出最細一張
-        if (ctx.leading) { ch = { cards: [Math.min(...ctx.hand)] }; r = E.freePlay(S, seat, ch.cards); }
-        else r = E.pass(S, seat);
-      } else {
-        if (ctx.leading || (S.table && S.table.a)) ch = E.aiChoose(ctx, opp, { random: true });
-        if (!ch && ctx.leading) ch = { cards: [Math.min(...ctx.hand)] };
-        r = ch ? E.freePlay(S, seat, ch.cards) : E.pass(S, seat);
-      }
+      let ch = null;
+      if (timeout) { if (ctx.leading) ch = E.hints(ctx, opp)[0]; }   // 超時：有牌喺枱就 Pass，要開局就出最細合法牌
+      else { ch = E.aiChoose(ctx, opp, { random: true }); if (!ch && ctx.leading) ch = E.hints(ctx, opp)[0]; }
+      const r = ch ? E.play(S, seat, ch.cards) : E.pass(S, seat);
       if (timeout) this.event({ k: 'toast', text: S.seats[seat].name + ' 超時，' + (ch ? '自動出牌' : '自動 Pass') });
       if (r.ok) this.after();
     }
@@ -1347,7 +1356,7 @@ input,select{font-family:inherit;color:inherit}
       };
       const opt = (k, list, lab) => `<select class="sel" data-rule="${k}" ${isHost ? '' : 'disabled'}>${list.map(x => `<option value="${x}"${+r[k] === x ? ' selected' : ''}>${lab(x)}</option>`).join('')}</select>`;
       const tog = (k, label) => `<div class="tog${isHost ? '' : ' ro'}" ${isHost ? `data-tog="${k}"` : ''}><span>${label}</span><span class="sw2${r[k] ? ' on' : ''}"></span></div>`;
-      const empty = v.seats.filter(p => !p).length;
+      const empty = v.seats.filter(p => !p).length, seatedN = 4 - empty;
       $('#room').innerHTML = `<div class="room-card">
         <i class="corner a"></i><i class="corner b"></i><i class="corner c"></i><i class="corner d"></i>
         <div class="room-head"><div><div class="en gold-t" style="font-size:14px;margin-bottom:10px">Private Table · 私人牌局</div>
@@ -1358,11 +1367,14 @@ input,select{font-family:inherit;color:inherit}
           <div class="rule"><label>起始籌碼</label>${opt('startChips', [5000, 10000, 20000, 50000, 100000], fmt)}</div>
           <div class="rule"><label>每張牌籌碼</label>${opt('unit', [1, 5, 10, 20, 50, 100], x => fmt(x) + ' / 張')}</div>
           <div class="rule"><label>出牌計時</label>${opt('turnTime', [0, 15, 20, 30, 45, 60], x => x ? '每回合 ' + x + ' 秒' : '不計時')}</div>
-          ${isHost ? `<div class="tog" data-tog="d3First"><span>${r.d3First ? '每局由揸 ♦3 嗰位開局' : '每局由上局贏家開局'}</span><span class="sw2${r.d3First ? ' on' : ''}"></span></div>` : `<div class="tog ro"><span>${r.d3First ? '每局由揸 ♦3 嗰位開局' : '每局由上局贏家開局'}</span></div>`}
+          ${isHost ? `<div class="tog" data-tog="d3First"><span>${r.d3First ? '每局由最細牌（通常係 ♦3）開局' : '每局由上局贏家開局'}</span><span class="sw2${r.d3First ? ' on' : ''}"></span></div>` : `<div class="tog ro"><span>${r.d3First ? '每局由最細牌（通常係 ♦3）開局' : '每局由上局贏家開局'}</span></div>`}
+          ${tog('lastOneRule', '下家報一張，出單張必須出最大')}
+          ${tog('lowStraights', 'A2345、23456 計做蛇（23456 最大）')}
+          ${tog('flushBySuit', '花（同花）先比花色，再比點數')}
           <div class="tog ro"><span>計分：剩 1–9 張 ×1 · 10–12 張炒 ×2 · 13 張三炒 ×3</span></div>
         </div>
-        <div class="room-foot"><div class="note">${isHost ? (empty ? `尚欠 ${empty} 位玩家 — 可以等朋友入座，或者加入電腦玩家補位。` : '四位已就座，可以開始。') : '等待房主開始牌局…'}</div>
-          ${isHost ? `<button class="btn gold lg" data-act="start" ${empty ? 'disabled' : ''}>開始牌局</button>` : ''}</div></div>`;
+        <div class="room-foot"><div class="note">${isHost ? (seatedN < 2 ? '最少要兩位玩家先可以開始 — 可以等朋友入座，或者加入電腦玩家。' : empty ? `${seatedN} 位已就座，可以開始；空位照派牌，但冇人用（死牌）。` : '四位已就座，可以開始。') : '等待房主開始牌局…'}</div>
+          ${isHost ? `<button class="btn gold lg" data-act="start" ${seatedN < 2 ? 'disabled' : ''}>開始牌局</button>` : ''}</div></div>`;
     },
 
     /* ---- 牌局 ---- */
@@ -1395,7 +1407,9 @@ input,select{font-family:inherit;color:inherit}
       let html = '';
       for (let s = 0; s < 4; s++) {
         const rel = (s - v.you + 4) % 4; if (rel === 0) continue;
-        if (v.seats[s]) html += this.plateHTML(s, rel);
+        if (v.seats[s] && v.active.includes(s)) html += this.plateHTML(s, rel);
+        else if (!v.active.includes(s) && v.phase !== 'lobby') html += `<div class="plate dead" data-rel="${rel}"><div class="pinfo"><div class="pname">空位</div><div class="help">死牌 · 冇人用</div></div>
+          <div class="pcards"><div class="fan">${this.dealing ? '' : '<div class="cback"></div>'.repeat(v.counts[s])}</div></div></div>`;
       }
       $('#plates').innerHTML = html;
       this.renderMe();
@@ -1429,7 +1443,7 @@ input,select{font-family:inherit;color:inherit}
       } else if (v.phase === 'playing') {
         if (v.lastTable) html = `<div class="played fade">${v.lastTable.cards.map(c => cardHTML(c)).join('')}</div>`;
         const who = v.turn === v.you ? '你' : esc(this.seatName(v.turn));
-        html += `<div class="idle">${v.firstPlay && v.rules.d3First ? `${who} 揸住 ♦3<br>由 ${who} 開局` : `輪到 ${who} 出牌`}</div>`;
+        html += `<div class="idle">${v.firstPlay && v.rules.d3First ? `${who} 揸住 ${E.cardText(v.startCard)}<br>由 ${who} 開局` : `輪到 ${who} 出牌`}</div>`;
       }
       el.innerHTML = html;
       this.newPlay = false;
@@ -1507,6 +1521,7 @@ input,select{font-family:inherit;color:inherit}
       el.addEventListener('contextmenu', e => { e.preventDefault(); this.sel.clear(); this.refreshSel(); });
     },
     refreshSel() {
+      this.playErr = '';
       $$('#hand .card').forEach(c => c.classList.toggle('sel', this.sel.has(+c.dataset.c)));
       const h = $('#hand'); if (h) h.dataset.key = '';
       this.renderActions();
@@ -1517,8 +1532,9 @@ input,select{font-family:inherit;color:inherit}
       let status = '';
       if (v.phase === 'settle') status = '本局完結';
       else if (this.dealing) status = '洗牌派牌中…';
+      else if (mine && this.playErr) status = `<span style="color:#f0a3ae">${esc(this.playErr)}</span>`;
       else if (!mine) status = `等待 <b style="font-family:var(--cn)">${esc(this.seatName(v.turn))}</b> 出牌…`;
-      else if (!v.table) status = v.firstPlay && v.rules.d3First && v.hand.includes(0) ? '輪到你開局（你揸住 ♦3）' : '輪到你出牌';
+      else if (!v.table) status = v.firstPlay && v.rules.d3First && v.hand.includes(v.startCard) ? `輪到你開局（你揸住 ${E.cardText(v.startCard)}）` : '輪到你出牌';
       else status = '輪到你 · 出牌或者 Pass';
       const timer = mine && this.localDeadline ? `<b id="tleft"></b>` : '';
       el.innerHTML = `<div class="me" id="meplate"></div>
@@ -1530,12 +1546,13 @@ input,select{font-family:inherit;color:inherit}
     },
     openStats() {
       const v = this.v;
-      const rows = v.seats.map(p => `<tr><td><i class="dotc" style="--c:${COLORS[p.color]};display:inline-block;margin-right:6px"></i>${esc(p.name)}</td><td>${fmt(p.chips)}</td>
+      const seated = [0, 1, 2, 3].filter(i => v.seats[i]);
+      const rows = seated.map(i => v.seats[i]).map(p => `<tr><td><i class="dotc" style="--c:${COLORS[p.color]};display:inline-block;margin-right:6px"></i>${esc(p.name)}</td><td>${fmt(p.chips)}</td>
         <td class="${p.stats.net > 0 ? 'pos' : p.stats.net < 0 ? 'negc' : ''}">${fmtS(p.stats.net)}</td><td>${p.stats.wins}</td><td>${p.rebuys || '—'}</td></tr>`).join('');
-      const hist = v.history.slice().reverse().slice(0, 15).map(h => `<tr><td>第 ${h.round} 局</td>${h.deltas.map(d => `<td class="${d > 0 ? 'pos' : d < 0 ? 'negc' : ''}">${fmtS(d)}</td>`).join('')}</tr>`).join('');
+      const hist = v.history.slice().reverse().slice(0, 15).map(h => `<tr><td>第 ${h.round} 局</td>${seated.map(i => h.deltas[i]).map(d => `<td class="${d > 0 ? 'pos' : d < 0 ? 'negc' : ''}">${fmtS(d)}</td>`).join('')}</tr>`).join('');
       this.modal(`<div class="sheet stats"><button class="x" data-act="close">×</button><h3>籌碼紀錄</h3><div class="hair" style="margin:14px 0 6px"></div>
         <div class="sect">今晚累計</div><table class="stat-t"><tr><th>玩家</th><th>籌碼</th><th>淨贏輸</th><th>勝局</th><th>補碼</th></tr>${rows}</table>
-        <div class="sect">每局輸贏</div>${hist ? `<table class="stat-t"><tr><th></th>${v.seats.map(p => `<th>${esc(p.name.slice(0, 5))}</th>`).join('')}</tr>${hist}</table>` : '<div class="help">未有完成嘅牌局</div>'}
+        <div class="sect">每局輸贏</div>${hist ? `<table class="stat-t"><tr><th></th>${seated.map(i => `<th>${esc(v.seats[i].name.slice(0, 5))}</th>`).join('')}</tr>${hist}</table>` : '<div class="help">未有完成嘅牌局</div>'}
         <div class="row-btns"><button class="btn gold" data-act="close">關閉</button></div></div>`);
     },
     renderBill() {
@@ -1555,7 +1572,7 @@ input,select{font-family:inherit;color:inherit}
         <div class="bill-head"><div class="en">Settlement · 結算單</div><div class="win"><span class="crown">♛</span>${esc(w.name)} 勝出</div>
         <div class="amt">${fmtS(R.rows[0].amount)}</div><div class="help">第 ${R.round} 局 · 每張 ${fmt(v.rules.unit)} 籌碼</div></div>
         <div class="bill-rows"><div class="brow hd"><div>玩家</div><div style="text-align:right">剩牌</div><div style="text-align:right">倍數</div><div style="text-align:right">張數計</div><div style="text-align:right">籌碼</div></div>${rows}</div>
-        <div class="bill-foot"><div class="note">${v.seats.some(p => p.chips <= 0) ? '籌碼輸光嘅玩家，下局會自動補碼。' : '虛擬籌碼 · 僅供娛樂'}</div>
+        <div class="bill-foot"><div class="note">${v.seats.some(p => p && p.chips <= 0) ? '籌碼輸光嘅玩家，下局會自動補碼。' : '虛擬籌碼 · 僅供娛樂'}</div>
           <div style="display:flex;gap:10px">${isHost ? `${v.solo ? '' : '<button class="btn" data-act="toLobby">返回房間</button>'}<button class="btn gold lg" data-act="next">下一局 · 洗牌派牌</button>` : '<span class="help">等待房主開始下一局…</span>'}</div></div></div>`);
       this.renderReopen();
     },
@@ -1566,7 +1583,13 @@ input,select{font-family:inherit;color:inherit}
       if (need && !ex) { const b = document.createElement('button'); b.id = 'reopen'; b.className = 'btn gold reopen'; b.dataset.act = 'showbill'; b.textContent = '查看結算單'; dock.appendChild(b); }
       if (!need && ex) ex.remove();
     },
-    doPlay() { if (!this.myTurn()) return; if (!this.sel.size) return this.onError('請先揀牌'); this.send({ t: 'play', cards: [...this.sel] }); this.sel.clear(); },
+    doPlay() {
+      if (!this.myTurn()) return;
+      if (!this.sel.size) return this.onError('請先揀牌');
+      const chk = E.checkPlay([...this.sel], E.ctxFromView(this.v));   // 只喺撳出牌時先驗證
+      if (!chk.ok) { this.playErr = chk.err; this.onError(chk.err); this.renderActions(); return; }
+      this.playErr = ''; this.send({ t: 'play', cards: [...this.sel] }); this.sel.clear();
+    },
     doPass() { if (!this.myTurn() || !this.v.table) return; this.sel.clear(); this.send({ t: 'pass' }); },
     openSettings() {},
     rulesText() { return ''; },
@@ -1615,7 +1638,7 @@ input,select{font-family:inherit;color:inherit}
     },
     renderStacks() {
       const v = this.v, el = $('#stacks'); if (!el) return;
-      el.innerHTML = [0, 1, 2, 3].map(s => v.seats[s] ? this.stackHTML(this.chipsOf(s), (s - v.you + 4) % 4, s) : '').join('');
+      el.innerHTML = [0, 1, 2, 3].map(s => v.seats[s] && v.active.includes(s) ? this.stackHTML(this.chipsOf(s), (s - v.you + 4) % 4, s) : '').join('');
     },
     chipCollect() {
       const v = this.v; if (!v || !v.lastResult || !this.settling) return;
